@@ -2,10 +2,11 @@
   "name": "backend",
   "version": "1.0.0",
   "description": "",
-  "type": "module",
+  "type": "commonjs",
   "main": "server.js",
   "dependencies": {
     "@google/genai": "^2.8.0",
+    "@supabase/supabase-js": "^2.107.0",
     "accepts": "^2.0.0",
     "agent-base": "^7.1.4",
     "base64-js": "^1.5.1",
@@ -121,6 +122,5 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
-  "type": "commonjs"
+  "license": "ISC"
 }
