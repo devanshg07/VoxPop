@@ -1,17 +1,14 @@
-import { createClient } from '@supabase/supabase-js';
 import 'dotenv/config';
+import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 
-async function testSDK() {
-  // Simple check to ping your project's auth/api health
-  const { data, error } = await supabase.auth.getSession();
-  
+async function check() {
+  const { data, error } = await supabase.from('agents').select('*').limit(1);
   if (error) {
-    console.error('SDK Connection failed:', error.message);
+    console.error("CRITICAL ERROR:", error);
   } else {
-    console.log('Supabase SDK successfully integrated!');
+    console.log("Connection successful. Found data:", data);
   }
 }
-
-testSDK();
+check();
