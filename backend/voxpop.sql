@@ -17,9 +17,8 @@ CREATE TABLE agents (
     id SERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
     gender VARCHAR(20) NOT NULL,
-    race VARCHAR(50) NOT NULL,
     age INT NOT NULL,
-    country_loyalty VARCHAR(50) NOT NULL,
+    country VARCHAR(50) NOT NULL,
     archetype VARCHAR(50) NOT NULL,
     traits TEXT[] NOT NULL,
     current_city VARCHAR(50) NOT NULL,
@@ -54,7 +53,6 @@ CREATE TABLE posts (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Insert hubs...
 INSERT INTO map_hubs (city, country, hub_name, hub_type, center_x, center_z) VALUES
 ('Toronto', 'Canada', 'BMO Field', 'stadium', -20, 20),
 ('Vancouver', 'Canada', 'BC Place', 'stadium', -25, 25),
