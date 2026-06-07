@@ -1,55 +1,114 @@
-import { supabase } from './supabaseClient.js';
 import OpenAI from 'openai';
+import { supabase } from './supabaseClient.js';
 import 'dotenv/config';
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
+const CONCURRENCY_LIMIT = 25;
+
+async function generateReaction(agent, matchEvent) {
+  const isWinner = agent.country === matchEvent.winner;
+
+  const prompt = `
+You are ${agent.name}.
+
+Country: ${agent.country}
+Fan Archetype: ${agent.archetype}
+
+Traits:
+${agent.traits?.join(', ') || 'None'}
+
+Recent Memories:
+${agent.memories?.slice(-3).join('; ') || 'No significant memories'}
+
+Current Event:
+${matchEvent.event_description}
+
+Rules:
+- Respond in exactly one sentence.
+- Sound like a real football fan.
+- Use emotion.
+- Show bias.
+- Use slang naturally if appropriate.
+- Never mention being an AI.
+- Never explain your reasoning.
+
+Output only the reaction.
+`;
+
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    temperature: 0.9,
+    presence_penalty: 0.6,
+    messages: [
+      {
+        role: 'system',
+        content: prompt
+      }
+    ]
+  });
+
+  const reaction =
+    completion.choices[0]?.message?.content?.trim() ||
+    'No reaction.';
+
+  await supabase
+    .from('agents')
+    .update({
+      last_speech: reaction,
+      current_mood_intensity: isWinner ? 10 : 2,
+      status_activity: isWinner ? 'Celebrating' : 'Disappointed',
+      memories: [
+        ...(agent.memories || []),
+        `Event: ${matchEvent.event_description}`
+      ].slice(-5)
+    })
+    .eq('id', agent.id);
+}
+
+async function processBatch(batch, matchEvent) {
+  await Promise.all(
+    batch.map(async agent => {
+      try {
+        if (agent.current_hub_id !== matchEvent.hub_id) {
+          await supabase
+            .from('agents')
+            .update({
+              last_speech: null,
+              status_activity: 'idle',
+              current_mood_intensity: 5
+            })
+            .eq('id', agent.id);
+
+          return;
+        }
+
+        await generateReaction(agent, matchEvent);
+      } catch (error) {
+        console.error(
+          `Agent ${agent.id} failed:`,
+          error.message
+        );
+      }
+    })
+  );
+}
 
 export async function reactToMatch(matchEvent) {
-  const { data: agents } = await supabase.from('agents').select('*');
-  if (!agents) return;
+  const { data: agents, error } = await supabase
+    .from('agents')
+    .select('*');
 
-  for (const agent of agents) {
-    if (agent.current_hub_id === matchEvent.hub_id) {
-      const isWinner = agent.country === matchEvent.winner;
+  if (error || !agents) {
+    console.error('Failed to fetch agents:', error);
+    return;
+  }
 
-      // 1. DYNAMIC SYSTEM PROMPT: Include memory context
-      const prompt = `
-        You are a football fan from ${agent.country}. 
-        Archetype: ${agent.archetype}. 
-        Recent Memories: ${agent.memories ? agent.memories.slice(-3).join(' | ') : 'None'}.
-        Event: ${matchEvent.event_description}.
-        Mood: ${isWinner ? 'Happy' : 'Angry'}.
-        
-        STEP 1: Write a short internal thought (monologue) about how this event affects your mood.
-        STEP 2: Write a 1-sentence external reaction to the match.
-        Format your response as: "THOUGHT: [text] | REACTION: [text]"
-      `;
+  for (let i = 0; i < agents.length; i += CONCURRENCY_LIMIT) {
+    const batch = agents.slice(i, i + CONCURRENCY_LIMIT);
 
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [{ role: "system", content: prompt }]
-      });
-
-      const response = completion.choices[0].message.content;
-      const [thought, reaction] = response.split('|').map(s => s.trim().replace(/^THOUGHT: |^REACTION: /, ''));
-
-      // 2. PERSISTENT STATE UPDATE: Append to memories, don't overwrite
-      const newMemory = `Match Event: ${matchEvent.event_description}. Thought: ${thought}`;
-      
-      await supabase.from('agents').update({
-        last_speech: reaction,
-        current_mood_intensity: isWinner ? 10 : 1,
-        status_activity: isWinner ? "Celebrating" : "Mourning",
-        memories: [...(agent.memories || []), newMemory].slice(-5) // Keep only last 5
-      }).eq('id', agent.id);
-
-    } else {
-      // 3. RESET ONLY IF NOT IN HUB
-      await supabase.from('agents').update({
-        last_speech: null,
-        status_activity: 'idle',
-        current_mood_intensity: 5 // Baseline
-      }).eq('id', agent.id);
-    }
+    await processBatch(batch, matchEvent);
   }
 }

@@ -1,32 +1,46 @@
 import { supabase } from './supabaseClient.js';
 
+const MOVEMENT_FACTOR = 0.1;
+
 export async function updateAgentPositions(hubId) {
-  // 1. Get the target coordinates for this stadium
-  const { data: hub } = await supabase
-    .from('map_hubs')
-    .select('center_x, center_z')
-    .eq('id', hubId)
-    .single();
+  try {
+    const { data: hub, error: hubError } = await supabase
+      .from('map_hubs')
+      .select('center_x, center_z')
+      .eq('id', hubId)
+      .single();
 
-  if (!hub) return;
+    if (hubError || !hub) {
+      console.error('Failed to load hub:', hubError);
+      return;
+    }
 
-  // 2. Fetch all agents in this stadium
-  const { data: agents } = await supabase
-    .from('agents')
-    .select('id, pos_x, pos_z, speed')
-    .eq('current_hub_id', hubId);
+    const { data: agents, error: agentError } = await supabase
+      .from('agents')
+      .select('id, pos_x, pos_z');
 
-  // 3. Incrementally move agents toward center_x, center_z
-  for (const agent of agents) {
-    const dx = hub.center_x - agent.pos_x;
-    const dz = hub.center_z - agent.pos_z;
-    
-    // Move 10% closer to the center each tick
-    const newX = agent.pos_x + (dx * 0.1);
-    const newZ = agent.pos_z + (dz * 0.1);
+    if (agentError || !agents) {
+      console.error('Failed to load agents:', agentError);
+      return;
+    }
 
-    await supabase.from('agents')
-      .update({ pos_x: newX, pos_z: newZ })
-      .eq('id', agent.id);
+    await Promise.all(
+      agents.map(agent =>
+        supabase
+          .from('agents')
+          .update({
+            pos_x:
+              agent.pos_x +
+              (hub.center_x - agent.pos_x) * MOVEMENT_FACTOR,
+
+            pos_z:
+              agent.pos_z +
+              (hub.center_z - agent.pos_z) * MOVEMENT_FACTOR
+          })
+          .eq('id', agent.id)
+      )
+    );
+  } catch (error) {
+    console.error('Position update failed:', error);
   }
 }
