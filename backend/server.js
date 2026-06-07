@@ -1,55 +1,71 @@
 import 'dotenv/config';
+
 import { createClient } from '@supabase/supabase-js';
-import { reactToMatch } from './reactions.js'; 
+
+import { reactToMatch } from './reactions.js';
 import { updateAgentPositions } from './movement.js';
 
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
-let lastProcessedEventId = null;
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_KEY
+);
 
-async function simulationLoop() {
-  console.log("Simulation Heartbeat Active...");
-  
-  const { data: latestEvent } = await supabase
-    .from('match_events')
-    .select('*')
-    .order('created_at', { ascending: false }) 
-    .limit(1)
-    .single();
+async function clearPreviousReactions() {
+  const { error } = await supabase
+    .from('agents')
+    .update({
+      last_speech: null,
+      status_activity: 'idle'
+    })
+    .not('last_speech', 'is', null);
 
-  if (latestEvent && latestEvent.id !== lastProcessedEventId) {
-    console.log(`New Event: ${latestEvent.event_description}`);
-    
-    // 1. FORCE CLEAR: Nullify all fields that hold history
-    // We use .not() to target rows that have data to ensure a clean wipe
-    await supabase
-      .from('agents')
-      .update({ 
-        last_speech: null, 
-        status_activity: 'idle' 
-      })
-      .not('last_speech', 'is', null);
-
-    console.log("Agents table wiped clean.");
-
-    // 2. SAFETY DELAY: 500ms pause to ensure DB handles the wipe
-    await new Promise(resolve => setTimeout(resolve, 500));
-
-    // 3. TRIGGER NEW REACTIONS
-    await reactToMatch(latestEvent);
-    console.log("Reactions generated.");
-    
-    await updateAgentPositions(latestEvent.hub_id); 
-    
-    // 4. CLEANUP EVENT LOG
-    await supabase
-      .from('match_events')
-      .delete()
-      .neq('id', latestEvent.id);
-      
-    lastProcessedEventId = latestEvent.id;
+  if (error) {
+    console.error('Failed to clear reactions:', error);
   }
-  
-  setTimeout(simulationLoop, 10000);
 }
 
-simulationLoop();
+async function processEvent(event) {
+  try {
+    console.log(
+      `Processing Event: ${event.event_description}`
+    );
+
+    await updateAgentPositions(event.hub_id);
+
+    await clearPreviousReactions();
+
+    await reactToMatch(event);
+
+    if (event.source !== 'user') {
+      await supabase
+        .from('match_events')
+        .delete()
+        .eq('id', event.id);
+    }
+
+    console.log('Event processing completed.');
+  } catch (error) {
+    console.error('Event processing failed:', error);
+  }
+}
+
+supabase
+  .channel('match_events_channel')
+  .on(
+    'postgres_changes',
+    {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'match_events'
+    },
+    payload => {
+      processEvent(payload.new);
+    }
+  )
+  .subscribe(status => {
+    console.log(
+      `Realtime subscription status: ${status}`
+    );
+  });
+
+console.log('Simulation engine listening for events.');
