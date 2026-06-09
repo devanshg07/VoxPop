@@ -1,32 +1,52 @@
 import { supabase } from './supabaseClient.js';
+const MOVEMENT_FACTOR = 0.1;
 
-export async function updateAgentPositions(hubId) {
-  // 1. Get the target coordinates for this stadium
-  const { data: hub } = await supabase
-    .from('map_hubs')
-    .select('center_x, center_z')
-    .eq('id', hubId)
-    .single();
+export async function updateAgentPositions(hubId, countries = []) {
+  try {
+    const { data: hub, error: hubError } = await supabase
+      .from('map_hubs')
+      .select('center_x, center_z')
+      .eq('id', hubId)
+      .single();
 
-  if (!hub) return;
+    if (hubError || !hub) {
+      console.error('Failed to load hub:', hubError?.message);
+      return 0;
+    }
 
-  // 2. Fetch all agents in this stadium
-  const { data: agents } = await supabase
-    .from('agents')
-    .select('id, pos_x, pos_z, speed')
-    .eq('current_hub_id', hubId);
+    let query = supabase.from('agents').select('id, pos_x, pos_z');
+    if (countries.length > 0) {
+      query = query.in('country', countries);
+    }
 
-  // 3. Incrementally move agents toward center_x, center_z
-  for (const agent of agents) {
-    const dx = hub.center_x - agent.pos_x;
-    const dz = hub.center_z - agent.pos_z;
-    
-    // Move 10% closer to the center each tick
-    const newX = agent.pos_x + (dx * 0.1);
-    const newZ = agent.pos_z + (dz * 0.1);
+    const { data: agents, error: agentError } = await query;
+    if (agentError || !agents) {
+      console.error('Failed to load agents:', agentError?.message);
+      return 0;
+    }
 
-    await supabase.from('agents')
-      .update({ pos_x: newX, pos_z: newZ })
-      .eq('id', agent.id);
+    const updates = agents.map(agent => ({
+      id: agent.id,
+      pos_x: agent.pos_x + (hub.center_x - agent.pos_x) * MOVEMENT_FACTOR,
+      pos_z: agent.pos_z + (hub.center_z - agent.pos_z) * MOVEMENT_FACTOR
+    }));
+
+    if (updates.length === 0) {
+      return 0;
+    }
+
+    const { error: updateError } = await supabase
+      .from('agents')
+      .upsert(updates, { onConflict: 'id' });
+
+    if (updateError) {
+      console.error('Failed to update movement:', updateError.message);
+      return 0;
+    }
+
+    return updates.length;
+  } catch (error) {
+    console.error('Movement update failed:', error);
+    return 0;
   }
 }
